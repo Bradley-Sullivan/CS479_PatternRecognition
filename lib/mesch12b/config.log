@@ -1,0 +1,9 @@
+This file contains any messages produced by compilers while
+running configure, to aid debugging if configure makes a mistake.
+
+config.site:13: default build_alias set to x86_64-pc-msys
+config.site:20: default prefix set to /usr
+configure:575: checking for acc
+configure:605: checking for cc
+configure:635: checking for gcc
+configure:665: checking for cc
