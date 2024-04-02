@@ -23,10 +23,18 @@ void plot_roc(MAT *data, char *fname, char *title) {
     gnuplot_set_ylabel(plot, "FN");
     gnuplot_cmd(plot, "set title \"%s\"", title);
 
-    gnuplot_cmd(plot, "set style line 1 lc rgb \"red\" linetype 1 linewidth 2 pointtype 7 pointsize 1.5");
+    gnuplot_cmd(plot, "set style line 1 lc rgb \"red\" linetype 1 linewidth 2 pointtype 7 pointsize 1.5 notitle");
+    gnuplot_cmd(plot, "set style textbox opaque");
 
-    gnuplot_cmd(plot, "plot '-' using 1:2 with linespoints linestyle 1\n");
+    gnuplot_cmd(plot, "plot '-' using 1:2 with linespoints linestyle 1,\\\n'' using 1:2:3 with labels center boxed notitle");
 
+    for (i = 0; i < data->m; i += 1) {
+        for (k = 0, p = pbuf; k < data->n; k += 1) {
+            p += sprintf(p, "%lf ", data->me[i][k]);
+        }
+        gnuplot_cmd(plot, "%s", pbuf);
+    }
+    gnuplot_cmd(plot, "e\n");
 
     for (i = 0; i < data->m; i += 1) {
         for (k = 0, p = pbuf; k < data->n; k += 1) {
@@ -41,7 +49,7 @@ void plot_roc(MAT *data, char *fname, char *title) {
 
 void face_validate(Image *img, Image *ref, double *fpr, double *fnr) {
     size_t i, s, m, r;
-    size_t fp, fn, tp, tn;
+    double fp, fn, tp, tn;
 
     fp = 0; fn = 0; tp = 0; tn = 0;
     for (i = 0, *fpr = 0, *fnr = 0; i < img->size; i += 3) {
@@ -63,9 +71,29 @@ void face_validate(Image *img, Image *ref, double *fpr, double *fnr) {
 
     *fpr = fp / (fp + tn);
     *fnr = fn / (fn + tp);
+}
 
-    printf("fpr: %lf\n", *fpr);
-    printf("fnr: %lf\n", *fnr);
+void face_test(gauss_t *color, Image *out, Image *img, MAT *data, double thresh) {
+    size_t k, s;
+    double d;
+    VEC *v;
+
+    v = v_get(data->n);
+    // iterate RG vectors
+    for (k = 0; k < data->m; k += 1) {
+        // get and test RG vectors against model
+        get_row(data, k, v);
+        d = gauss_eval(color, v);
+        // if likelihood above threshold
+        if (d >= thresh) {
+            // copy over RGB values to output image
+            for (s = 0; s < 3; s += 1) {
+                out->data[k * 3 + s] = img->data[k * 3 + s];
+            } 
+        }
+    }
+
+    v_free(v);
 }
 
 void face_detect(gauss_t *color, char *ifname, char *rfname, size_t n, double step) {
@@ -74,8 +102,8 @@ void face_detect(gauss_t *color, char *ifname, char *rfname, size_t n, double st
     FILE *fp;
     VEC *v;
     double d, t;
-    size_t i, k, s;
-    double *fpr, *fnr;
+    size_t i, k, s, e;
+    double *fpr, *fnr, err;
     char fnbuf[MAX_FPATH], tbuf[MAX_FPATH];
     
     // allocate ROC stat buffers
@@ -94,25 +122,13 @@ void face_detect(gauss_t *color, char *ifname, char *rfname, size_t n, double st
 
     printf("Testing %llu batches with threshold-step of %lf...\n", n, step);
     // iterate batches
-    for (i = 0, t = step; i < n; i += 1, t += step) {
+    for (i = 0, t = step, err = 999; i < n; i += 1, t += step) {
         printf("\tTesting batch %llu with threshold %lf...\n", i, t);
-        // iterate RG vectors
-        for (k = 0; k < tdata->m; k += 1) {
-            // get and test RG vectors against model
-            get_row(tdata, k, v);
-            d = gauss_eval(color, v);
-            // if likelihood above threshold
-            if (d >= t) {
-                // copy over RGB values to output image
-                for (s = 0; s < 3; s += 1) {
-                    out->data[k * 3 + s] = img->data[k * 3 + s];
-                } 
-            }
-        }
+        face_test(color, out, img, tdata, t);
 
         // compute current threshold ROC stats
         face_validate(out, ref, fpr + i, fnr + i);
-
+        if (fabs(fpr[i] - fnr[i]) <= err) { e = i; err = fabs(fpr[i] - fnr[i]); }
 
         // reset output image
         memset(out->data, 0, sizeof(uint8_t) * out->size);
@@ -122,11 +138,15 @@ void face_detect(gauss_t *color, char *ifname, char *rfname, size_t n, double st
     roc = m_get(n, 3);
     v_resize(v, 3);
     for (i = 0, t = 0; i < n; i += 1, t += step) {
-        v_set_val(v, 0, fpr[i]);
-        v_set_val(v, 1, fnr[i]);
+        v_set_val(v, 0, fnr[i]);
+        v_set_val(v, 1, fpr[i]);
         v_set_val(v, 2, t);
         set_row(roc, i, v);
     }
+
+    face_test(color, out, img, tdata, m_get_val(roc, e, 2));
+    sprintf(fnbuf, "err_thresh_%s", ifname);
+    write_image(fnbuf, out);
     
     sprintf(fnbuf, "roc_data_%s.mat", ifname);
     fp = fopen(fnbuf, "w+");
@@ -134,7 +154,7 @@ void face_detect(gauss_t *color, char *ifname, char *rfname, size_t n, double st
 
     printf("Plotting ROC curve for '%s' test batch (n = %llu, step = %lf)...\n", ifname, n, step);
     // plot ROC curve
-    sprintf(fnbuf, "%s_roc", ifname);
+    sprintf(fnbuf, "roc_%s", ifname);
     sprintf(tbuf, "ROC for %s (n = %llu, step = %.02lf)\n", ifname, n, step);
     plot_roc(roc, fnbuf, tbuf);
 
@@ -142,6 +162,7 @@ void face_detect(gauss_t *color, char *ifname, char *rfname, size_t n, double st
     m_free(tdata); m_free(roc);
     v_free(v);
     free(fpr); free(fnr);
+    fclose(fp);
 }
 
 void face_train(gauss_t *color, char *ifname, char *rfname) {
@@ -186,9 +207,14 @@ void face_exp1() {
         .sigma = m_get(2, 2),
         .dataset = MNULL
     };
+    double c;
 
-    face_train(&color, "train3.ppm", "ref3.ppm");
-    face_detect(&color, "train3.ppm", "ref3.ppm", 10, 10);
+    face_train(&color, "train1.ppm", "ref1.ppm");
+
+    c = 1 / (2 * M_PI * sqrt(m_det(color.sigma)));
+
+    face_detect(&color, "train3.ppm", "ref3.ppm", 20, c / 20);
+    face_detect(&color, "train6.ppm", "ref6.ppm", 20, c / 20);
 }
 
 int main(void) {
@@ -198,7 +224,7 @@ int main(void) {
     MAT *mle = MNULL;
     MAT *adata = m_get(ADATA_LEN, 2);
     MAT *bdata = m_get(BDATA_LEN, 2);
-    MAT *datasets[] = { bdata, adata };
+    MAT *datasets[] = { adata, bdata };
     gauss_t c1, c2;
     gauss_t *classes[] = { &c1, &c2 };
     batch_t b1 = {
@@ -209,7 +235,7 @@ int main(void) {
     };
     
     c1 = (gauss_t) {
-        .id = 2,
+        .id = 1,
         .mu = v_get(2),
         .sigma = m_get(2, 2),
         .dataset = adata,
@@ -217,7 +243,7 @@ int main(void) {
     };
 
     c2 = (gauss_t) {
-        .id = 1,
+        .id = 2,
         .mu = v_get(2),
         .sigma = m_get(2, 2),
         .dataset = bdata,
@@ -240,9 +266,9 @@ int main(void) {
     }
 
     // exp 1
-    printf("============ <EXPERIMENT 1> ============\n\n");
-    mle_exp(datasets, &b1, 1);
-    printf("\n============ </EXPERIMENT 1> ============\n\n");
+    // printf("============ <EXPERIMENT 1> ============\n\n");
+    // mle_exp(datasets, &b1, 1);
+    // printf("\n============ </EXPERIMENT 1> ============\n\n");
 
     c2.mu->ve[0] = 4; c2.mu->ve[1] = 4;
     m_set_val(c2.sigma, 0, 0, 4); m_set_val(c2.sigma, 0, 1, 0);
@@ -256,9 +282,9 @@ int main(void) {
     }
 
     // exp 2
-    printf("============ <EXPERIMENT 2> ============\n\n");
-    mle_exp(datasets, &b1, 2);
-    printf("\n============ </EXPERIMENT 2> ============\n\n");
+    // printf("============ <EXPERIMENT 2> ============\n\n");
+    // mle_exp(datasets, &b1, 2);
+    // printf("\n============ </EXPERIMENT 2> ============\n\n");
 
     // exp 3
     face_exp1();
