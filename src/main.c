@@ -96,7 +96,7 @@ void face_test(gauss_t *color, Image *out, Image *img, MAT *data, double thresh)
     v_free(v);
 }
 
-void face_detect(gauss_t *color, char *ifname, char *rfname, size_t n, double step) {
+void face_detect(gauss_t *color, char *ifname, char *rfname, size_t n, double step, int rg) {
     Image *img, *ref, *out;
     MAT *tdata, *roc;
     FILE *fp;
@@ -115,9 +115,12 @@ void face_detect(gauss_t *color, char *ifname, char *rfname, size_t n, double st
     ref = load_image(rfname);
     out = new_image(img->m, img->n, img->q);
 
-    printf("Getting '%s' RG vectors for testing...\n", ifname);
+    printf("Getting '%s' %s vectors for testing...\n", ifname, rg ? "RG" : "YCbCr");
     // get input image dataset
-    tdata = image_rgmat(img, MNULL);
+    if (rg)
+        tdata = image_rgmat(img, MNULL);
+    else
+        tdata = image_ycbcrmat(img, MNULL);
     v = v_get(tdata->n);
 
     printf("Testing %llu batches with threshold-step of %lf...\n", n, step);
@@ -145,17 +148,17 @@ void face_detect(gauss_t *color, char *ifname, char *rfname, size_t n, double st
     }
 
     face_test(color, out, img, tdata, m_get_val(roc, e, 2));
-    sprintf(fnbuf, "err_thresh_%s", ifname);
+    sprintf(fnbuf, "err_thresh_%s_%s", rg ? "RG" : "YCbCr", ifname);
     write_image(fnbuf, out);
     
-    sprintf(fnbuf, "roc_data_%s.mat", ifname);
+    sprintf(fnbuf, "roc_data_%s_%s.mat", rg ? "RG" : "YCbCr",  ifname);
     fp = fopen(fnbuf, "w+");
     m_foutput(fp, roc);
 
     printf("Plotting ROC curve for '%s' test batch (n = %llu, step = %lf)...\n", ifname, n, step);
     // plot ROC curve
-    sprintf(fnbuf, "roc_%s", ifname);
-    sprintf(tbuf, "ROC for %s (n = %llu, step = %.02lf)\n", ifname, n, step);
+    sprintf(fnbuf, "roc_%s_%s", ifname, rg ? "RG" : "YCbCr");
+    sprintf(tbuf, "ROC for %s (n = %llu, step = %.02lf) %s\n", ifname, n, step, rg ? "RG" : "YCbCr");
     plot_roc(roc, fnbuf, tbuf);
 
     del_image(img); del_image(out); del_image(ref);
@@ -165,7 +168,7 @@ void face_detect(gauss_t *color, char *ifname, char *rfname, size_t n, double st
     fclose(fp);
 }
 
-void face_train(gauss_t *color, char *ifname, char *rfname) {
+void face_train(gauss_t *color, char *ifname, char *rfname, int rg) {
     size_t i, s;
     double d, t;
     char fnbuf[32];
@@ -184,9 +187,12 @@ void face_train(gauss_t *color, char *ifname, char *rfname) {
     sprintf(fnbuf, "%s_masked.ppm", ifname);
     write_image(fnbuf, out);
 
-    printf("Getting '%s' RG vectors for training...\n", rfname);
+    printf("Getting '%s' %s vectors for training...\n", rfname, rg ? "RG" : "YCrCb");
     // get masked RG dataset
-    color->dataset = image_rgmat(out, color->dataset);
+    if (rg)
+        color->dataset = image_rgmat(out, color->dataset);
+    else 
+        color->dataset = image_ycbcrmat(out, color->dataset);
 
     // trim zero data
     trim_zeros(color->dataset);
@@ -200,7 +206,7 @@ void face_train(gauss_t *color, char *ifname, char *rfname) {
     v_free(v);
 }
 
-void face_exp1() {
+void face_exp(int rg) {
     gauss_t color = {
         .id = 420,
         .mu = v_get(2),
@@ -209,14 +215,18 @@ void face_exp1() {
     };
     double c;
 
-    face_train(&color, "train1.ppm", "ref1.ppm");
+    face_train(&color, "train1.ppm", "ref1.ppm", rg);
 
     c = 1 / (2 * M_PI * sqrt(m_det(color.sigma)));
 
-    face_detect(&color, "train3.ppm", "ref3.ppm", 20, c / 20);
-    face_detect(&color, "train6.ppm", "ref6.ppm", 20, c / 20);
+    face_detect(&color, "train3.ppm", "ref3.ppm", 20, c / 20, rg);
+    face_detect(&color, "train6.ppm", "ref6.ppm", 20, c / 20, rg);
+
+    m_free(color.dataset);
 }
 
+#define IMG_YCBCR 0
+#define IMG_NMRG  1
 int main(void) {
     int i, k;
     FILE *da;
@@ -286,8 +296,11 @@ int main(void) {
     // mle_exp(datasets, &b1, 2);
     // printf("\n============ </EXPERIMENT 2> ============\n\n");
 
-    // exp 3
-    face_exp1();
+    // exp 3a
+    face_exp(IMG_NMRG);
+
+    // exp 3b
+    face_exp(IMG_YCBCR);
 
     fclose(da); fclose(db);
 

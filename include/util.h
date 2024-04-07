@@ -22,5 +22,6 @@ void norm_sort(MAT *m);
 int dataset_len_cmp(const void *a, const void *b);
 
 MAT *image_rgmat(Image *img, MAT *m);
+MAT *image_ycbcrmat(Image *img, MAT *m);
 
 #endif // UTIL_H

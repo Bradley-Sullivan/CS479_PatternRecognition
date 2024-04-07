@@ -258,3 +258,22 @@ MAT *image_rgmat(Image *img, MAT *m) {
 
     return out;
 }
+
+MAT *image_ycbcrmat(Image *img, MAT *m) {
+    MAT *out;
+    size_t i, r;
+    double n;
+
+    if (!img) return NULL;
+    if (!m) out = m_get(img->m * img->n, 2);
+    else out = m_resize(m, img->m * img->n, 2);
+
+    for (i = 0; i < img->size; i += 3) {
+        n = -0.169 * img->data[i] - 0.332 * img->data[i + 1] + 0.5 * img->data[i + 2];
+        m_set_val(out, i / 3, 0, n);
+        n = 0.5 * img->data[i] - 0.419 * img->data[i + 1] - 0.081 * img->data[i + 2];
+        m_set_val(out, i / 3, 1, n);
+    }
+
+    return out;
+}
